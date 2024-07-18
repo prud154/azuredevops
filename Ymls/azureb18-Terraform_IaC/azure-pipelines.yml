@@ -1,0 +1,105 @@
+trigger:
+- master
+
+stages:
+- stage: 'Version_Check'
+  displayName: 'Checking Versions of Terraform & packer'
+  
+  jobs:
+  - job: "Terraform_Version"
+    displayName: 'Terraform & Packer Version Check'
+
+    pool: TerraformAgent
+    
+    steps:
+    - script: terraform version
+      displayName: 'terraform version check'
+    - script: packer version
+      displayName: 'packer version check'
+
+
+- stage: 'Packer_Validation'
+  displayName: 'Validating Packer File'
+  
+  jobs:
+  - job: "Packer_Version"
+    displayName: 'Validate Packer Files & Image Creation'
+    
+    pool: TerraformAgent
+
+    steps:
+     - task: DownloadSecureFile@1
+       inputs:
+          secureFile: 'packer-vars.json'
+
+     - task: CopyFiles@2
+       inputs:
+        SourceFolder: '$(Agent.TempDirectory)'
+        Contents: '**'
+        TargetFolder: '/home/testuser/TerraformAgent/_work/1/s'
+
+     - script: ls -al && pwd
+       displayName: 'List Files In The Repo'
+
+     - script: packer validate -var-file packer-vars.json packer.json
+       displayName: 'Validate packer.json'
+      
+     - script: packer build -var-file packer-vars.json packer.json
+       displayName: 'Build AWS AMI Image'
+
+- stage: 'Terraform_Plan_Apply'
+  displayName: 'Planning & Deploying Terraform'
+  
+  jobs:
+  - job: "Terraform_Plan"
+    displayName: 'Terraform_Plan'
+    
+    pool: TerraformAgent
+    
+    steps:
+    - task: DownloadSecureFile@1
+      inputs:
+        secureFile: 'backend.json'
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: '$(Agent.TempDirectory)'
+        Contents: '**'
+        TargetFolder: '/home/testuser/TerraformAgent/_work/1/s'
+
+    - script: terraform init -backend-config=backend.json
+      displayName: 'Initialize_Terraform_Backend'
+
+    - script: terraform plan --var-file test.tfvars -var="aws_access_key=$(access_key)" -var="aws_secret_key=$(secret_key)"
+      displayName: 'Perform_Terraform_Plan'
+
+    - script: terraform apply --var-file test.tfvars -var="aws_access_key=$(access_key)" -var="aws_secret_key=$(secret_key)" --auto-approve
+      displayName: 'Perform_Terraform_Apply'
+
+    - script: terraform state list
+      displayName: 'Listing_Terraform_Resources'
+
+- stage: 'Terraform_Destroy'
+  displayName: 'Destroying Terraform'
+  
+  jobs:
+  - deployment: "Terraform_Destroy"
+    pool: TerraformAgent
+    environment: TerraformDestroy
+    strategy:
+      runOnce:
+        deploy :
+          steps:
+            - task: DownloadSecureFile@1
+              inputs:
+                secureFile: 'backend.json'
+            - task: CopyFiles@2
+              inputs:
+                SourceFolder: '$(Agent.TempDirectory)'
+                Contents: '**'
+                TargetFolder: '/home/testuser/TerraformAgent/_work/1/s'
+
+            - script: terraform init -backend-config=backend.json
+              displayName: 'Initialize_Terraform_Backend'
+            
+            - script: terraform destroy --var-file test.tfvars -var="aws_access_key=$(access_key)" -var="aws_secret_key=$(secret_key)" --auto-approve
+              displayName: 'Perform_Terraform_Destroy'

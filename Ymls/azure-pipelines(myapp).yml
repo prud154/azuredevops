@@ -1,0 +1,203 @@
+trigger:
+- master
+
+pool:
+  name: LinuxAgentPool
+  demands:
+    - Env -equals Prod
+
+#Artifact staging directory is purged/cleaned after every build and due to that
+#Artifact is not availible for next stage.
+stages:
+    - stage: BuildingJavaCode
+      jobs:
+      - job: BuildingJavaCodeJob
+        timeoutInMinutes: 10
+        steps:
+        - script: echo $(Build.BuildId)
+          displayName: 'Display The Build-ID'
+
+        - script: ls -al && pwd
+          displayName: 'List Files & Current Working Directory'
+        
+        - script: ls -al && chmod 700 build.sh && sudo bash ./build.sh && ls -al
+          displayName: 'Run the build script'
+        
+        - script: ls -al && mv ROOT.war ROOT$(Build.BuildId).war && ls -al
+          displayName: 'List Files & Rename ROOT.war'
+     
+        - script: cp ROOT$(Build.BuildId).war /artifacts && ls -al /artifacts
+          displayName: 'Copy WAR to tmp folder'
+
+        - task: CopyFiles@2
+          inputs:
+            Contents: 'ROOT$(Build.BuildId).war'
+            TargetFolder: '$(Build.ArtifactStagingDirectory)'
+            OverWrite: true
+          displayName: 'Copying WAR file to ArtifactStagingDirector'
+
+        - task: PublishBuildArtifacts@1
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+            ArtifactName: 'ROOT$(Build.BuildId).war'
+            publishLocation: 'Container'
+          displayName: 'Publishing WAR Artifact.'
+
+    - stage: CopyingArtifactsToAzureAndAws
+      jobs:
+      - job: CopyFilesToAzureBlob
+        timeoutInMinutes: 10
+        steps:
+        - checkout: none
+
+        - task: AzureCLI@2
+          inputs:
+            azureSubscription: 'devopsb20-azure-connection'
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              az storage blob upload-batch --account-name devopsb20adoartifacts  --account-key $(STORAGE_ACCOUNT_KEY) --destination artifacts --source /artifacts/
+          displayName: 'Azure Upload artifacts to Azure Blob'
+          continueOnError: true
+
+      - job: CopyFilesToAWSS3Bucket
+        timeoutInMinutes: 10
+        steps:
+        - checkout: none                
+        - task: S3Upload@1
+          inputs:
+            awsCredentials: 'devopsb20-aws-connection'
+            regionName: 'us-east-1'
+            bucketName: 'devopsb20artifacts'
+            sourceFolder: '/artifacts/'
+            globExpressions: 'ROOT$(Build.BuildId).war'
+          displayName: 'AWS Upload artifacts to AWS S3'
+          continueOnError: true
+
+    - stage: BuildDockerImagePushToDockerHubAndAzureACR
+      jobs:
+      - job: BuildIMageAndPushToDockerHub
+        timeoutInMinutes: 10
+        steps:
+        - checkout: none
+        - task: Docker@2
+          inputs:
+            containerRegistry: 'devopsb20-dockerhub-connection'
+            repository: 'sreeharshav/devopsb20ado'
+            command: 'buildAndPush'
+            Dockerfile: '**/Dockerfile'
+          displayName: 'Creating & Pushing Docker Image To Docker HUB'
+          continueOnError: true
+      - job: BuildIMageAndPushToAzureACR
+        dependsOn: BuildIMageAndPushToDockerHub
+        timeoutInMinutes: 10
+        steps:
+        - checkout: none
+        - task: Bash@3
+          inputs:
+            targetType: 'inline'
+            script: |
+              docker login -u devopsb20 -p $(acrpassword) devopsb20.azurecr.io
+              docker tag sreeharshav/devopsb20ado:$(Build.BuildId) devopsb20.azurecr.io/devopsb20:$(Build.BuildId)
+              docker push devopsb20.azurecr.io/devopsb20:$(Build.BuildId)
+          displayName: 'Creating & Pushing Docker Image To Azure ACR'
+
+    - stage: DeployDockerImageToAzureACI
+      pool:
+       name: LinuxAgentPool 
+       demands:
+         - Env -equals Prod
+      jobs:
+      - job: DeployAzureACI
+        timeoutInMinutes: 10
+        steps:
+        - checkout: none
+        - task: AzureCLI@2
+          inputs:
+            azureSubscription: 'devopsb20-azure-connection'
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: 'az container create -g DevOpsB20ADO --name devopsaci$(Build.BuildId) --image devopsb20.azurecr.io/devopsb20:$(Build.BuildId) --cpu 1 --memory 1 --ports 8080 --dns-name-label devopsaci$(Build.BuildId) --registry-username devopsb20 --registry-password $(acrpassword) --location eastus'
+          displayName: 'Deploy Docker Image to Azure Container Instances'
+          continueOnError: true
+
+    - stage: 'DeployingToStagingEnvironment'
+      pool: LinuxAgentPool
+      displayName: 'Deploying To Staging Environment'
+      
+      jobs:
+      - deployment: "DeployWARtoStagingServer"
+        environment: 
+          name: STAG
+          resourceType: VirtualMachine
+        strategy:
+          runOnce:
+            deploy :
+              steps:
+               - script: hostname && sudo rm -rf /var/lib/tomcat8/webapps/mywebapp.war
+                 displayName: 'Deleting Existing WAR file'
+                 continueOnError: true
+
+               - script: cd /home/ubuntu/azagent/_work/1/ && ls -al && rm -rf ROOT.war
+                 displayName: 'List Artifact Files'
+                 continueOnError: true
+
+               - script: cd /home/ubuntu/azagent/_work/1/ && sudo mv ROOT$(Build.BuildId).war ROOT.war && ls -al ROOT.war
+                 displayName: 'Rename Artifact Files'
+                 continueOnError: true
+
+               - script: cd /home/ubuntu/azagent/_work/1/ && sudo cp ROOT.war/ROOT$(Build.BuildId).war /var/lib/tomcat8/webapps/mywebapp.war
+                 displayName: 'Copy Artifact Files to webapps Folder'
+                 continueOnError: true
+
+               - script: sudo rm -rf ROOT*.war
+                 displayName: 'Delete Artifact Files'
+                 continueOnError: true
+
+    - stage: 'DeployingToPRODEnvironment'
+      pool: LinuxAgentPool
+      displayName: 'Deploying To Production Environment'
+      
+      jobs:
+      - deployment: "DeployWARtoProdServer"
+        environment: 
+          name: PROD
+          resourceType: VirtualMachine
+        strategy:
+          runOnce:
+            deploy :
+              steps:
+               - script: hostname && sudo rm -rf /var/lib/tomcat8/webapps/mywebapp.war
+                 displayName: 'Deleting Existing WAR file'
+                 continueOnError: true
+
+               - script: cd /home/ubuntu/azagent/_work/1/ && ls -al && rm -rf ROOT.war
+                 displayName: 'List Artifact Files'
+                 continueOnError: true
+
+               - script: cd /home/ubuntu/azagent/_work/1/ && sudo mv ROOT$(Build.BuildId).war ROOT.war && ls -al ROOT.war
+                 displayName: 'Rename Artifact Files'
+                 continueOnError: true
+
+               - script: cd /home/ubuntu/azagent/_work/1/ && sudo cp ROOT.war/ROOT$(Build.BuildId).war /var/lib/tomcat8/webapps/mywebapp.war
+                 displayName: 'Copy Artifact Files to webapps Folder'
+                 continueOnError: true
+
+               - script: sudo rm -rf ROOT*.war
+                 displayName: 'Delete Artifact Files'
+                 continueOnError: true
+
+
+    - stage: DeleteTheRepo
+      jobs:
+      - job: DeleteTheRepoCntent
+        timeoutInMinutes: 10
+        steps:
+         - checkout: none
+         - script: cd /home/adminsree/myagent/_work/1/s && sudo rm -rf src
+           displayName: 'Remove Files'
+
+         - script: cd /artifacts && sudo rm -f *.war
+           displayName: 'Remove Files From tmp Folder'
+
+

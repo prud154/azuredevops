@@ -1,0 +1,88 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- master
+
+pool: LinuxAgentPool
+  #vmImage: ubuntu-latest
+
+steps:
+- script: echo "Testing The Pipelines"
+  displayName: 'Pipeline Testing'
+
+- script: echo $(Build.BuildId)
+  displayName: 'Display The Build-ID'
+
+- script: ls -al && pwd
+  displayName: 'List Files & Current Working Directory'
+
+# - script: sudo apt update >> /dev/null 2>&1 && sudo apt install -y openjdk-8-jdk >> /dev/null 2>&1 && java -version
+#   displayName: 'Installing openjdk 8 and Check Java Version'
+
+- script: ls -al && chmod 700 build.sh && sudo bash ./build.sh && ls -al
+  displayName: 'Run the build script'
+
+- script: ls -al && mv ROOT.war ROOT$(Build.BuildId).war && ls -al
+  displayName: 'List Files & Rename ROOT.war'
+
+- task: CopyFiles@2
+  inputs:
+    Contents: 'ROOT$(Build.BuildId).war'
+    TargetFolder: '$(Build.ArtifactStagingDirectory)'
+    OverWrite: true
+  displayName: 'Copying WAR file to ArtifactStagingDirector'
+
+- script: ls -al $(Build.ArtifactStagingDirectory)
+  displayName: 'List Build Artifact Staging Folder'
+
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'devopsb16-azure-connection'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az storage blob upload-batch --account-name devopsb16buildpipeline   --account-key $(STORAGE_ACCOUNT_KEY) --destination artifacts --source /home/adminsree/myagent/_work/1/a
+  displayName: 'Azure Upload artifacts to Azure Blob'
+
+- task: S3Upload@1
+  inputs:
+    awsCredentials: 'devopsb16-aws-connection'
+    regionName: 'us-east-1'
+    bucketName: 'devopsb15flowlogs'
+    sourceFolder: '$(Build.ArtifactStagingDirectory)'
+    globExpressions: 'ROOT$(Build.BuildId).war'
+  displayName: 'AWS Upload artifacts to AWS S3'
+
+- task: Docker@2
+  inputs:
+    containerRegistry: 'devopsb16-dockerhub-connection'
+    repository: 'sreeharshav/devopsb16ado'
+    command: 'buildAndPush'
+    Dockerfile: '**/Dockerfile'
+  displayName: 'Creating & Pushing Docker Image To Docker HUB'
+  
+- task: Bash@3
+  inputs:
+    targetType: 'inline'
+    script: |
+      docker login -u devopsb16 -p $(acrpassword) devopsb16.azurecr.io
+      docker tag sreeharshav/devopsb16ado:$(Build.BuildId) devopsb16.azurecr.io/devopsb16:$(Build.BuildId)
+      docker push devopsb16.azurecr.io/devopsb16:$(Build.BuildId)
+  displayName: 'Creating & Pushing Docker Image To Azure ACR'
+
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'devopsb16-azure-connection'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: 'az container create -g ENGAZUREB05 --name devops$(Build.BuildId) --image devopsb16.azurecr.io/devopsb16:$(Build.BuildId) --cpu 1 --memory 1 --ports 8080 --dns-name-label devops$(Build.BuildId) --registry-username devopsb16 --registry-password $(acrpassword) --location eastus'
+  displayName: 'Deploy Docker Image to Azure Container Instances'
+  continueOnError: true
+
+
+- script: cd /home/adminsree/myagent/_work/1/s && sudo rm -rf src
+  displayName: 'Remove Files'
+

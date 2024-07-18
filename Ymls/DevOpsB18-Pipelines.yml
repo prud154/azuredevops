@@ -1,0 +1,123 @@
+trigger:
+  - master
+
+#For using single agent for all stages use below code. 
+pool: 
+    name: LinuxAgentPool
+    demands:
+     - ENV -equals Prod
+
+stages:
+    - stage: BuildingJavaCode
+      jobs:
+      - job: BuildingJavaCodeJob
+        timeoutInMinutes: 10
+        steps:
+        - script: echo $(Build.BuildId)
+          displayName: 'Display The Build-ID'
+
+        - script: ls -al && pwd
+          displayName: 'List Files & Current Working Directory'
+        
+        - script: ls -al && chmod 700 build.sh && sudo bash ./build.sh && ls -al
+          displayName: 'Run the build script'
+        
+        - script: ls -al && mv ROOT.war ROOT$(Build.BuildId).war && ls -al
+          displayName: 'List Files & Rename ROOT.war'
+     
+        - script: cp ROOT$(Build.BuildId).war /tmp/artifacts && ls -al /tmp/artifacts
+          displayName: 'Copy WAR to tmp folder'
+
+        # - task: CopyFiles@2
+        #   inputs:
+        #      Contents: 'ROOT$(Build.BuildId).war'
+        #      #Artifact staging directory is purged/cleaned after every build and due to that
+        #      #Artifact is not availible for next stage.
+        #      TargetFolder: '/tmp/artifacts'
+        #      OverWrite: true
+        #   continueOnError: true
+
+    - stage: CopyingArtifactsToAzureAndAws
+      jobs:
+      - job: CopyFilesToAzureBlob
+        timeoutInMinutes: 10
+        steps:
+        - checkout: none
+
+        - task: AzureCLI@2
+          inputs:
+            azureSubscription: 'devopsb18-azure-connection'
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              az storage blob upload-batch --account-name devopsb18adoartifacts  --account-key $(STORAGE_ACCOUNT_KEY) --destination artifacts --source /tmp/artifacts/
+          displayName: 'Azure Upload artifacts to Azure Blob'
+          continueOnError: true
+
+        - task: S3Upload@1
+          inputs:
+            awsCredentials: 'devopsb17-aws-connection'
+            regionName: 'us-east-1'
+            bucketName: 'devopsb17adoartifacts'
+            sourceFolder: '/tmp/artifacts/'
+            globExpressions: 'ROOT$(Build.BuildId).war'
+          displayName: 'AWS Upload artifacts to AWS S3'
+          continueOnError: true
+
+    - stage: BuildDockerImagePushToDockerHubAndAzureACR
+      jobs:
+      - job: BuildIMageAndPushToDockerHub
+        timeoutInMinutes: 10
+        steps:
+        - checkout: none
+        - task: Docker@2
+          inputs:
+            containerRegistry: 'devopsb17-dockerhub-connection'
+            repository: 'sreeharshav/devopsb18ado'
+            command: 'buildAndPush'
+            Dockerfile: '**/Dockerfile'
+          displayName: 'Creating & Pushing Docker Image To Docker HUB'
+          continueOnError: true
+      - job: BuildIMageAndPushToAzureACR
+        dependsOn: BuildIMageAndPushToDockerHub
+        timeoutInMinutes: 10
+        steps:
+        - checkout: none
+        - task: Bash@3
+          inputs:
+            targetType: 'inline'
+            script: |
+              docker login -u devopsb18 -p $(acrpassword) devopsb18.azurecr.io
+              docker tag sreeharshav/devopsb18ado:$(Build.BuildId) devopsb18.azurecr.io/devopsb18:$(Build.BuildId)
+              docker push devopsb18.azurecr.io/devopsb18:$(Build.BuildId)
+          displayName: 'Creating & Pushing Docker Image To Azure ACR'
+
+    - stage: DeployDockerImageToAzureACI
+      jobs:
+      - job: DeployAzureACI
+        timeoutInMinutes: 10
+        steps:
+        - checkout: none
+        - task: AzureCLI@2
+          inputs:
+            azureSubscription: 'devopsb17-azure-connection'
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: 'az container create -g DevOpsB18 --name devops$(Build.BuildId) --image devopsb18.azurecr.io/devopsb18:$(Build.BuildId) --cpu 1 --memory 1 --ports 8080 --dns-name-label devops$(Build.BuildId) --registry-username devopsb18 --registry-password $(acrpassword) --location eastus'
+          displayName: 'Deploy Docker Image to Azure Container Instances'
+          continueOnError: true
+
+
+
+
+    - stage: DeleteTheRepo
+      jobs:
+      - job: DeleteTheRepoCntent
+        timeoutInMinutes: 10
+        steps:
+         - checkout: none
+         - script: cd /home/testuser/myagent/_work/1/s && sudo rm -rf src
+           displayName: 'Remove Files'
+
+         - script: cd /tmp/artifacts && sudo rm -f *.war
+           displayName: 'Remove Files From tmp Folder'

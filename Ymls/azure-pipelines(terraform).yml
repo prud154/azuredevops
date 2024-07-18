@@ -1,0 +1,138 @@
+trigger:
+  - master123
+
+#For using single agent for all stages use below code. 
+pool: 
+    name: LinuxAgentPool
+    demands:
+    - Terraform -equals Yes
+    - Packer -equals Yes
+
+stages:
+
+    - stage: 'Download_Secure_Files_and_Terraform_Validate'
+      displayName: 'Download Secure Files & Terraform Validate'
+      
+      jobs:
+      - job: "Download_Secure_Files"
+        displayName: 'Download_Secure_Files'
+        
+        steps:
+        - task: DownloadSecureFile@1
+          inputs:
+            secureFile: 'backend.json'
+
+        - task: DownloadSecureFile@1
+          inputs:
+            secureFile: 'terraform.tfvars'
+
+        - task: CopyFiles@2
+          inputs:
+            SourceFolder: '$(Agent.TempDirectory)'
+            Contents: '**'
+            TargetFolder: '/home/adminsree/myagent/_work/2/s/'
+
+        - script:  pwd && ls -al
+          displayName: 'Files_Check'
+
+        - script:  terraform init -backend-config=backend.json
+          displayName: 'Terraform_Initialize'
+
+        - script:  terraform validate
+          displayName: 'Terraform_Validate'
+
+    - stage: 'Download_Secure_Files_and_Terraform_Plan'
+      displayName: 'Download Secure Files & Terraform Plan'
+      
+      jobs:
+      - job: "Download_Secure_Files_And_Terraform_Plan"
+        displayName: 'Download_Secure_Files_And_Terraform_Plan'
+        
+        steps:
+        - task: DownloadSecureFile@1
+          inputs:
+            secureFile: 'backend.json'
+
+        - task: DownloadSecureFile@1
+          inputs:
+            secureFile: 'terraform.tfvars'
+
+        - task: CopyFiles@2
+          inputs:
+            SourceFolder: '$(Agent.TempDirectory)'
+            Contents: '**'
+            TargetFolder: '/home/adminsree/myagent/_work/2/s/'
+
+        - script:  pwd && ls -al
+          displayName: 'Files_Check'
+
+        - script:  terraform init -backend-config=backend.json
+          displayName: 'Terraform_Initialize'
+
+        - script:  terraform plan
+          displayName: 'Terraform_plan'
+
+    - stage: 'Download_Secure_Files_and_Terraform_Apply'
+      displayName: 'Download Secure Files & Terraform Apply'
+      
+      jobs:
+      - job: "Download_Secure_Files_And_Terraform_Apply"
+        displayName: 'Download_Secure_Files_And_Terraform_Apply'
+        
+        steps:
+        - task: DownloadSecureFile@1
+          inputs:
+            secureFile: 'backend.json'
+
+        - task: DownloadSecureFile@1
+          inputs:
+            secureFile: 'terraform.tfvars'
+
+        - task: CopyFiles@2
+          inputs:
+            SourceFolder: '$(Agent.TempDirectory)'
+            Contents: '**'
+            TargetFolder: '/home/adminsree/myagent/_work/2/s/'
+
+        - script:  pwd && ls -al
+          displayName: 'Files_Check'
+
+        - script:  terraform init -backend-config=backend.json
+          displayName: 'Terraform_Initialize'
+
+        - script:  terraform apply --auto-approve
+          displayName: 'Terraform_Apply'
+
+    - stage: 'Download_Secure_Files_and_Terraform_Destroy'
+      displayName: 'Download Secure Files & Terraform Destroy'
+      
+      jobs:
+      - deployment: "Download_Secure_Files_And_Terraform_Apply"
+        environment: DestroyApproval
+        strategy:
+          runOnce:
+            deploy :        
+             steps:
+             - task: DownloadSecureFile@1
+               inputs:
+                 secureFile: 'backend.json'
+     
+             - task: DownloadSecureFile@1
+               inputs:
+                 secureFile: 'terraform.tfvars'
+     
+             - task: CopyFiles@2
+               inputs:
+                 SourceFolder: '$(Agent.TempDirectory)'
+                 Contents: '**'
+                 TargetFolder: '/home/adminsree/myagent/_work/2/s/'
+     
+             - script:  pwd && ls -al
+               displayName: 'Files_Check'
+     
+             - script:  terraform init -backend-config=backend.json
+               displayName: 'Terraform_Initialize'
+     
+             - script:  terraform destroy --auto-approve
+               displayName: 'Terraform_Destroy'
+

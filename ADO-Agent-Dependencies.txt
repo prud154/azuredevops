@@ -1,0 +1,27 @@
+Packages Requried for Azure DevOps Agent:
+- apt update
+- Java 11
+- Maven
+- unzip jq net-tools
+- Terraform
+- Packer
+- docker & usermod -a -G docker adminsree
+- AZ CLI
+- AWS CLI
+- Ansible, create configfile, disable host_key_checking
+- trivy #https://github.com/aquasecurity/trivy/releases/tag/v0.41.0
+
+Run config.sh first and provide PAT token and then run svc.sh as given below.
+sudo ./svc.sh install adminsree  #Adds systemd service
+sudo ./svc.sh start
+
+
+sudo systemd-resolve --flush-caches
+
+1. Application CI/CD Pipeline
+   - Sonarqube Scanning
+   - Building
+   - Publishing artifacts
+   - Create COntainer image using the JAR
+   - Push to AWS S3, Storage Account, Image to ACR and DockerHUB.
+   - Deploy the container image as Azure ACI.
